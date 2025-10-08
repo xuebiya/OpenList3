@@ -338,6 +338,7 @@ func getSharingInfo(c *gin.Context) *sharingInfo {
 // 检测访问行为
 func detectAccessBehavior(c *gin.Context) accessBehavior {
 	userAgent := c.GetHeader("User-Agent")
+	rangeHeader := c.GetHeader("Range")
 	path := c.Request.URL.Path
 	ext := strings.ToLower(filepath.Ext(path))
 	
@@ -378,8 +379,12 @@ func detectAccessBehavior(c *gin.Context) accessBehavior {
 	
 	// 5. 浏览器访问媒体文件
 	if isBrowser(userAgent) && isMediaFile {
-		// 浏览器访问媒体文件，无论是否有 Range 请求头，都判定为浏览器播放
-		return BehaviorBrowserPlay
+		// 关键区分：有 Range 请求头说明是在线播放，没有则是下载
+		if rangeHeader != "" {
+			return BehaviorBrowserPlay
+		}
+		// 没有 Range 请求头，判定为下载
+		return BehaviorDownload
 	}
 	
 	// 6. 非浏览器、非播放器的访问，判定为下载

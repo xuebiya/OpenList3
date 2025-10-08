@@ -84,6 +84,18 @@ var accessLogCache = &logCache{
 	cache: make(map[string]time.Time),
 }
 
+// IP用户缓存，用于追踪同一IP的用户
+type ipUserCache struct {
+	mu    sync.RWMutex
+	cache map[string]string    // IP -> Username
+	time  map[string]time.Time // IP -> LastAccessTime
+}
+
+var ipUserMapping = &ipUserCache{
+	cache: make(map[string]string),
+	time:  make(map[string]time.Time),
+}
+
 // 生成缓存键（宽松模式：只基于 IP 和路径，忽略行为差异）
 func generateCacheKey(clientIP, filePath, username string, behavior accessBehavior) string {
 	// 使用宽松的键：IP + 路径，这样播放器的多个请求会被合并
@@ -112,6 +124,7 @@ func shouldLogAccess(clientIP, filePath, username string, behavior accessBehavio
 	
 	// 定期清理过期的缓存（保留最近15秒的记录）
 	go cleanExpiredCache()
+	go cleanExpiredIPMapping()
 	
 	return true
 }
@@ -125,6 +138,49 @@ func cleanExpiredCache() {
 	for key, lastTime := range accessLogCache.cache {
 		if now.Sub(lastTime) > 15*time.Second {
 			delete(accessLogCache.cache, key)
+		}
+	}
+}
+
+// 更新IP用户映射
+func updateIPUserMapping(clientIP, username string) {
+	if username == "" || username == "访客" {
+		return
+	}
+	
+	ipUserMapping.mu.Lock()
+	defer ipUserMapping.mu.Unlock()
+	
+	ipUserMapping.cache[clientIP] = username
+	ipUserMapping.time[clientIP] = time.Now()
+}
+
+// 从IP获取用户名
+func getUserFromIP(clientIP string) string {
+	ipUserMapping.mu.RLock()
+	defer ipUserMapping.mu.RUnlock()
+	
+	if username, exists := ipUserMapping.cache[clientIP]; exists {
+		// 检查缓存是否过期（30分钟）
+		if lastTime, ok := ipUserMapping.time[clientIP]; ok {
+			if time.Since(lastTime) < 30*time.Minute {
+				return username
+			}
+		}
+	}
+	return ""
+}
+
+// 清理过期的IP用户映射
+func cleanExpiredIPMapping() {
+	ipUserMapping.mu.Lock()
+	defer ipUserMapping.mu.Unlock()
+	
+	now := time.Now()
+	for ip, lastTime := range ipUserMapping.time {
+		if now.Sub(lastTime) > 30*time.Minute {
+			delete(ipUserMapping.cache, ip)
+			delete(ipUserMapping.time, ip)
 		}
 	}
 }
@@ -162,7 +218,7 @@ type sharingInfo struct {
 type accessBehavior string
 
 const (
-	BehaviorDirectPlay   accessBehavior = "直接播放"
+	BehaviorBrowserPlay  accessBehavior = "浏览器播放"
 	BehaviorPlayerPlay   accessBehavior = "播放器播放"
 	BehaviorDownload     accessBehavior = "下载"
 	BehaviorBrowserView  accessBehavior = "浏览器查看"
@@ -284,6 +340,7 @@ func detectAccessBehavior(c *gin.Context) accessBehavior {
 	userAgent := c.GetHeader("User-Agent")
 	rangeHeader := c.GetHeader("Range")
 	path := c.Request.URL.Path
+	ext := strings.ToLower(filepath.Ext(path))
 	
 	// 1. 优先检测是否是媒体播放器（最高优先级）
 	// 如果是播放器，无论什么路径都判定为播放器播放
@@ -292,10 +349,10 @@ func detectAccessBehavior(c *gin.Context) accessBehavior {
 	}
 	
 	// 2. 对于图片，通常是浏览器查看
-	ext := strings.ToLower(filepath.Ext(path))
 	imageExts := map[string]bool{
 		".jpg": true, ".jpeg": true, ".png": true, ".gif": true,
 		".bmp": true, ".webp": true, ".svg": true, ".ico": true, ".heic": true,
+		".tiff": true,
 	}
 	if imageExts[ext] {
 		return BehaviorBrowserView
@@ -306,41 +363,27 @@ func detectAccessBehavior(c *gin.Context) accessBehavior {
 		return BehaviorBrowserView
 	}
 	
-	// 4. 检查路径判断访问类型
-	// /p/* 路径通常用于代理播放
-	if strings.HasPrefix(path, "/p/") {
-		return BehaviorDirectPlay
+	// 4. 判断是否是媒体文件（视频/音频）
+	mediaExts := map[string]bool{
+		// 视频
+		".mp4": true, ".avi": true, ".mkv": true, ".mov": true, ".wmv": true,
+		".flv": true, ".webm": true, ".m4v": true, ".mpg": true, ".mpeg": true,
+		".3gp": true, ".f4v": true, ".rmvb": true, ".ts": true, ".m3u8": true,
+		".ogg": true, ".rm": true,
+		// 音频
+		".mp3": true, ".flac": true, ".wav": true, ".aac": true, ".m4a": true,
+		".wma": true, ".ape": true, ".alac": true, ".opus": true, ".oga": true,
 	}
 	
-	// /d/* 路径或 /sd/* 共享路径
-	if strings.HasPrefix(path, "/d/") || strings.HasPrefix(path, "/sd/") {
-		// 如果有 Range 请求头且是浏览器，判定为在线播放
-		if rangeHeader != "" && isBrowser(userAgent) {
-			return BehaviorDirectPlay
-		}
-		// 如果是浏览器但没有 Range 请求头，可能是下载
-		// 但如果是视频文件，浏览器通常会自动播放
-		videoExts := map[string]bool{
-			".mp4": true, ".webm": true, ".ogg": true, ".m3u8": true,
-		}
-		if videoExts[ext] && isBrowser(userAgent) {
-			return BehaviorDirectPlay
-		}
-		// 其他情况判定为下载
-		return BehaviorDownload
+	isMediaFile := mediaExts[ext]
+	
+	// 5. 浏览器访问媒体文件
+	if isBrowser(userAgent) && isMediaFile {
+		// 浏览器访问媒体文件，无论是否有 Range 请求头，都判定为浏览器播放
+		return BehaviorBrowserPlay
 	}
 	
-	// 5. 通过 Range 请求头判断
-	if rangeHeader != "" {
-		// 有 Range 请求通常表示流式播放
-		if isBrowser(userAgent) {
-			return BehaviorDirectPlay
-		}
-		// 非浏览器的 Range 请求，可能是其他工具
-		return BehaviorDownload
-	}
-	
-	// 默认为下载
+	// 6. 非浏览器、非播放器的访问，判定为下载
 	return BehaviorDownload
 }
 
@@ -412,11 +455,16 @@ func getUserName(c *gin.Context) string {
 
 // 从请求中获取用户名（用于下载链接等无需认证的场景）
 func getUserNameFromRequest(c *gin.Context) string {
+	clientIP := c.ClientIP()
+	
 	// 1. 先尝试从 context 获取（API 调用等已认证场景）
 	if userVal := c.Request.Context().Value(conf.UserKey); userVal != nil {
 		if user, ok := userVal.(*model.User); ok && user != nil {
 			if !user.IsGuest() {
-				return user.Username
+				username := user.Username
+				// 更新IP用户映射
+				updateIPUserMapping(clientIP, username)
+				return username
 			}
 		}
 	}
@@ -425,7 +473,10 @@ func getUserNameFromRequest(c *gin.Context) string {
 	if userObj, exists := c.Get("user"); exists {
 		if user, ok := userObj.(*model.User); ok && user != nil {
 			if !user.IsGuest() {
-				return user.Username
+				username := user.Username
+				// 更新IP用户映射
+				updateIPUserMapping(clientIP, username)
+				return username
 			}
 		}
 	}
@@ -434,11 +485,19 @@ func getUserNameFromRequest(c *gin.Context) string {
 	if token := c.Query("token"); token != "" {
 		// 尝试解析 token
 		if userClaims, err := common.ParseToken(token); err == nil {
-			return userClaims.Username
+			username := userClaims.Username
+			// 更新IP用户映射
+			updateIPUserMapping(clientIP, username)
+			return username
 		}
 	}
 
-	// 4. 默认返回"访客"（表示通过签名链接访问）
+	// 4. 从IP缓存中获取用户（如果该IP之前有登录用户）
+	if cachedUser := getUserFromIP(clientIP); cachedUser != "" {
+		return cachedUser
+	}
+
+	// 5. 默认返回"访客"（表示通过签名链接访问）
 	return "访客"
 }
 

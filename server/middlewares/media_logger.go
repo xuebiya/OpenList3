@@ -83,9 +83,10 @@ var accessLogCache = &logCache{
 	cache: make(map[string]time.Time),
 }
 
-// 生成缓存键
+// 生成缓存键（宽松模式：只基于 IP 和路径，忽略行为差异）
 func generateCacheKey(clientIP, filePath, username string, behavior accessBehavior) string {
-	key := fmt.Sprintf("%s|%s|%s|%s", clientIP, username, behavior, filePath)
+	// 使用宽松的键：IP + 路径，这样播放器的多个请求会被合并
+	key := fmt.Sprintf("%s|%s", clientIP, filePath)
 	hash := md5.Sum([]byte(key))
 	return fmt.Sprintf("%x", hash)
 }
@@ -97,9 +98,10 @@ func shouldLogAccess(clientIP, filePath, username string, behavior accessBehavio
 	accessLogCache.mu.Lock()
 	defer accessLogCache.mu.Unlock()
 	
-	// 检查是否在最近3秒内已经记录过相同的访问
+	// 检查是否在最近5秒内已经记录过相同的访问
+	// 使用5秒是因为播放器可能会发送多个请求（HEAD、GET等）
 	if lastTime, exists := accessLogCache.cache[cacheKey]; exists {
-		if time.Since(lastTime) < 3*time.Second {
+		if time.Since(lastTime) < 5*time.Second {
 			return false // 重复访问，不记录
 		}
 	}
@@ -107,7 +109,7 @@ func shouldLogAccess(clientIP, filePath, username string, behavior accessBehavio
 	// 记录新的访问时间
 	accessLogCache.cache[cacheKey] = time.Now()
 	
-	// 定期清理过期的缓存（保留最近10秒的记录）
+	// 定期清理过期的缓存（保留最近15秒的记录）
 	go cleanExpiredCache()
 	
 	return true
@@ -120,7 +122,7 @@ func cleanExpiredCache() {
 	
 	now := time.Now()
 	for key, lastTime := range accessLogCache.cache {
-		if now.Sub(lastTime) > 10*time.Second {
+		if now.Sub(lastTime) > 15*time.Second {
 			delete(accessLogCache.cache, key)
 		}
 	}
@@ -407,6 +409,52 @@ func getUserName(c *gin.Context) string {
 	return "访客"
 }
 
+// 从请求中获取用户名（用于下载链接等无需认证的场景）
+func getUserNameFromRequest(c *gin.Context) string {
+	// 1. 先尝试从 context 获取（API 调用等已认证场景）
+	if userVal := c.Request.Context().Value(conf.UserKey); userVal != nil {
+		if user, ok := userVal.(*model.User); ok && user != nil {
+			if !user.IsGuest() {
+				return user.Username
+			}
+		}
+	}
+
+	// 2. 尝试从 gin.Context 获取
+	if userObj, exists := c.Get("user"); exists {
+		if user, ok := userObj.(*model.User); ok && user != nil {
+			if !user.IsGuest() {
+				return user.Username
+			}
+		}
+	}
+
+	// 3. 对于下载链接（/d/*, /p/*），尝试从 Meta 信息推断
+	// 如果路径需要密码保护，说明是特定用户创建的
+	if metaVal := c.Request.Context().Value(conf.MetaKey); metaVal != nil {
+		if meta, ok := metaVal.(*model.Meta); ok && meta != nil {
+			// 如果有密码保护，获取创建者信息
+			if meta.Password != "" {
+				// 尝试获取该路径的所有者
+				if owner, err := db.GetUserById(meta.Uid); err == nil && owner != nil {
+					return owner.Username
+				}
+			}
+		}
+	}
+
+	// 4. 检查是否有 token 参数（某些客户端可能通过 URL 传递）
+	if token := c.Query("token"); token != "" {
+		// 尝试解析 token
+		if userClaims, err := common.ParseToken(token); err == nil {
+			return userClaims.Username
+		}
+	}
+
+	// 5. 默认返回"访客"（表示通过签名链接访问）
+	return "访客"
+}
+
 // 格式化日志信息为标准格式（包含共享信息和访问行为）
 func formatMediaLog(timestamp time.Time, clientIP string, filePath string, username string, behavior accessBehavior, sharing *sharingInfo) string {
 	// 基本格式："时间：XXXX年X月X日 XX:XX:XX 访问IP：XXX.XXX.XXX.XXX 用户：XXX 行为：XXX 访问路径：XXX"
@@ -458,18 +506,27 @@ func MediaLoggerMiddleware() gin.HandlerFunc {
 			}
 		}
 
+		// 忽略 HEAD 请求（播放器通常先发送 HEAD 请求检测文件）
+		if c.Request.Method == "HEAD" {
+			c.Next()
+			return
+		}
+
 		// 获取共享信息
 		sharing := getSharingInfo(c)
 
 		// 检查是否是直接访问媒体文件的路径
 		// 包括 /d/*path, /p/*path, /sd/:sid/*path 等
 		if isMediaFilePath(path) || (strings.HasPrefix(path, "/sd/") && isMediaFileInPath(path)) {
-			// 记录直接访问媒体文件的日志
+			// 先执行请求处理
 			c.Next()
 
-			clientIP := c.ClientIP()
-			username := getUserName(c)
+			// 检测访问行为
 			behavior := detectAccessBehavior(c)
+			
+			// 获取用户信息（可能在请求处理后才设置）
+			clientIP := c.ClientIP()
+			username := getUserNameFromRequest(c)
 
 			// 使用新的日志格式记录
 			logMediaAccess(time.Now(), clientIP, path, username, behavior, sharing)
@@ -547,7 +604,7 @@ func handleFSListRequest(c *gin.Context, sharing *sharingInfo) {
 	// 如果包含媒体文件，记录日志
 	if hasMediaFile {
 		clientIP := c.ClientIP()
-		username := getUserName(c)
+		username := getUserNameFromRequest(c)
 		behavior := detectAccessBehavior(c)
 
 		// 对每个媒体文件记录一条日志
@@ -594,7 +651,7 @@ func handleFSGetRequest(c *gin.Context, sharing *sharingInfo) {
 	if resp.Code == 200 && isMediaFileName(resp.Data.Name) {
 		clientIP := c.ClientIP()
 		mediaPath := resp.Data.Path
-		username := getUserName(c)
+		username := getUserNameFromRequest(c)
 		behavior := detectAccessBehavior(c)
 
 		// 使用新的日志格式记录
@@ -729,7 +786,7 @@ func MediaLoggerWithDebug() gin.HandlerFunc {
 		// 记录媒体文件访问日志
 		if isMedia {
 			clientIP := c.ClientIP()
-			username := getUserName(c)
+			username := getUserNameFromRequest(c)
 			behavior := detectAccessBehavior(c)
 			logMediaAccess(time.Now(), clientIP, mediaFilePath, username, behavior, sharing)
 		}

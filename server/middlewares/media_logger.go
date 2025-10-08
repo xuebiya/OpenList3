@@ -282,51 +282,13 @@ func detectAccessBehavior(c *gin.Context) accessBehavior {
 	rangeHeader := c.GetHeader("Range")
 	path := c.Request.URL.Path
 	
-	// 1. 检测是否是媒体播放器
-	for _, identifier := range playerIdentifiers {
-		if strings.Contains(userAgent, identifier) {
-			return BehaviorPlayerPlay
-		}
-	}
-	
-	// 2. 检查路径判断访问类型
-	// /p/* 路径通常用于代理播放
-	if strings.HasPrefix(path, "/p/") {
-		// 如果有 Range 请求头，说明是流式播放
-		if rangeHeader != "" {
-			return BehaviorDirectPlay
-		}
-		return BehaviorDirectPlay
-	}
-	
-	// /d/* 路径通常用于下载
-	if strings.HasPrefix(path, "/d/") {
-		// 如果有 Range 请求头且是浏览器，可能是在线播放
-		if rangeHeader != "" && isBrowser(userAgent) {
-			return BehaviorDirectPlay
-		}
-		return BehaviorDownload
-	}
-	
-	// /sd/* 共享下载路径
-	if strings.HasPrefix(path, "/sd/") {
-		// 如果有 Range 请求头且是浏览器，可能是在线播放
-		if rangeHeader != "" && isBrowser(userAgent) {
-			return BehaviorDirectPlay
-		}
-		return BehaviorDownload
-	}
-	
-	// 3. 通过 Range 请求头判断
-	if rangeHeader != "" {
-		// 有 Range 请求通常表示流式播放
-		if isBrowser(userAgent) {
-			return BehaviorDirectPlay
-		}
+	// 1. 优先检测是否是媒体播放器（最高优先级）
+	// 如果是播放器，无论什么路径都判定为播放器播放
+	if isPlayer(userAgent) {
 		return BehaviorPlayerPlay
 	}
 	
-	// 4. 对于图片，通常是浏览器查看
+	// 2. 对于图片，通常是浏览器查看
 	ext := strings.ToLower(filepath.Ext(path))
 	imageExts := map[string]bool{
 		".jpg": true, ".jpeg": true, ".png": true, ".gif": true,
@@ -336,17 +298,66 @@ func detectAccessBehavior(c *gin.Context) accessBehavior {
 		return BehaviorBrowserView
 	}
 	
-	// 5. API 调用默认为浏览器查看
+	// 3. API 调用默认为浏览器查看
 	if strings.HasPrefix(path, "/api/") {
 		return BehaviorBrowserView
+	}
+	
+	// 4. 检查路径判断访问类型
+	// /p/* 路径通常用于代理播放
+	if strings.HasPrefix(path, "/p/") {
+		return BehaviorDirectPlay
+	}
+	
+	// /d/* 路径或 /sd/* 共享路径
+	if strings.HasPrefix(path, "/d/") || strings.HasPrefix(path, "/sd/") {
+		// 如果有 Range 请求头且是浏览器，判定为在线播放
+		if rangeHeader != "" && isBrowser(userAgent) {
+			return BehaviorDirectPlay
+		}
+		// 如果是浏览器但没有 Range 请求头，可能是下载
+		// 但如果是视频文件，浏览器通常会自动播放
+		videoExts := map[string]bool{
+			".mp4": true, ".webm": true, ".ogg": true, ".m3u8": true,
+		}
+		if videoExts[ext] && isBrowser(userAgent) {
+			return BehaviorDirectPlay
+		}
+		// 其他情况判定为下载
+		return BehaviorDownload
+	}
+	
+	// 5. 通过 Range 请求头判断
+	if rangeHeader != "" {
+		// 有 Range 请求通常表示流式播放
+		if isBrowser(userAgent) {
+			return BehaviorDirectPlay
+		}
+		// 非浏览器的 Range 请求，可能是其他工具
+		return BehaviorDownload
 	}
 	
 	// 默认为下载
 	return BehaviorDownload
 }
 
+// 判断是否为播放器 User-Agent
+func isPlayer(userAgent string) bool {
+	for _, identifier := range playerIdentifiers {
+		if strings.Contains(userAgent, identifier) {
+			return true
+		}
+	}
+	return false
+}
+
 // 判断是否为浏览器 User-Agent
 func isBrowser(userAgent string) bool {
+	// 首先排除播放器（播放器优先级高于浏览器判断）
+	if isPlayer(userAgent) {
+		return false
+	}
+	
 	browserIdentifiers := []string{
 		"Mozilla", "Chrome", "Safari", "Firefox", "Edge", "Opera",
 		"MSIE", "Trident", // Internet Explorer

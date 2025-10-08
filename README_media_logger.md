@@ -216,38 +216,47 @@ var playerIdentifiers = []string{
 
 ## 技术细节
 
-### 访问行为检测逻辑
+### 访问行为检测逻辑（优化版）
 
-#### 1. 播放器检测（优先级最高）
-检测 User-Agent 中是否包含以下播放器标识：
-- **桌面播放器**：VLC, MPlayer, mpv, PotPlayer, KMPlayer, IINA
-- **媒体中心**：Kodi, Plex, Emby, Jellyfin
-- **系统播放器**：QuickTime, Windows-Media-Player, RealPlayer
-- **流媒体引擎**：FFmpeg (lavf), GStreamer, NSPlayer
-- **移动播放器**：stagefright, ExoPlayer, AppleCoreMedia
+#### 检测优先级（从高到低）
 
-#### 2. 路径分析
-- **`/p/*` 路径**：代理播放，标记为"直接播放"
-- **`/d/*` 路径**：
-  - 有 Range 请求 + 浏览器 → "直接播放"
-  - 其他情况 → "下载"
-- **`/sd/*` 路径**（共享）：
-  - 有 Range 请求 + 浏览器 → "直接播放"
-  - 其他情况 → "下载"
+**1. 播放器检测（最高优先级）** ⭐
+- 首先检测 User-Agent 是否包含播放器标识
+- **如果是播放器 UA，直接判定为"播放器播放"，不再进行后续判断**
+- 支持的播放器：
+  - **桌面播放器**：VLC, MPlayer, mpv, PotPlayer, KMPlayer, IINA
+  - **媒体中心**：Kodi, Plex, Emby, Jellyfin
+  - **系统播放器**：QuickTime, Windows-Media-Player, RealPlayer
+  - **流媒体引擎**：FFmpeg (lavf), GStreamer, NSPlayer
+  - **移动播放器**：stagefright, ExoPlayer, AppleCoreMedia
 
-#### 3. Range 请求头分析
-- 有 Range 请求 + 浏览器 User-Agent → "直接播放"
-- 有 Range 请求 + 非浏览器 → "播放器播放"
-
-#### 4. 文件类型判断
+**2. 文件类型判断**
 - 图片文件（jpg, png, gif 等） → "浏览器查看"
 - API 调用（`/api/*`） → "浏览器查看"
 
-#### 5. 浏览器识别
-识别以下浏览器标识：
-- Mozilla, Chrome, Safari, Firefox, Edge, Opera
-- Internet Explorer (MSIE, Trident)
-- 排除：curl, wget, axios, python, java, go-http-client 等工具
+**3. 路径分析**
+- **`/p/*` 路径**：代理播放 → "直接播放"
+- **`/d/*` 或 `/sd/*` 路径**：
+  - 有 Range 请求 + 浏览器 → "直接播放"
+  - 视频格式 (mp4, webm, ogg, m3u8) + 浏览器 → "直接播放"
+  - 其他情况 → "下载"
+
+**4. Range 请求头分析**
+- 有 Range 请求 + 浏览器 → "直接播放"
+- 有 Range 请求 + 非浏览器 → "下载"
+
+**5. 默认行为**
+- 无法判断的情况 → "下载"
+
+#### 浏览器识别
+- **播放器排除**：播放器 UA 不会被识别为浏览器
+- **识别标识**：Mozilla, Chrome, Safari, Firefox, Edge, Opera, IE
+- **工具排除**：curl, wget, axios, python, java, go-http-client 等
+
+#### 关键优化
+✅ **播放器 UA 优先级最高**：无论什么路径，播放器访问都不会被记录为"下载"  
+✅ **浏览器视频智能识别**：mp4 等视频文件在浏览器中默认为播放而非下载  
+✅ **Range 请求优化**：正确区分流式播放和普通下载
 
 ### 共享ID检测优先级
 1. 从 Gin Context 中获取（由 `SharingIdParse` 中间件设置）

@@ -136,14 +136,14 @@ var playerIdentifiers = []string{
 // 获取共享信息
 func getSharingInfo(c *gin.Context) *sharingInfo {
 	// 首先检查上下文中是否有共享ID（由 SharingIdParse 中间件设置）
-	if sidVal, exists := c.Get(conf.SharingIDKey); exists {
+	if sidVal := c.Request.Context().Value(conf.SharingIDKey); sidVal != nil {
 		if sid, ok := sidVal.(string); ok && sid != "" {
 			// 从数据库获取共享信息
-			sharingDB := &model.SharingDB{}
-			if err := db.GetByID(sharingDB, sid); err == nil {
+			sharingDB, err := db.GetSharingById(sid)
+			if err == nil {
 				// 获取创建者信息
-				creator := &model.User{}
-				if err := db.GetByID(creator, sharingDB.CreatorId); err == nil {
+				creator, err := db.GetUserById(sharingDB.CreatorId)
+				if err == nil {
 					return &sharingInfo{
 						SharingID: sid,
 						Creator:   creator.Username,
@@ -165,10 +165,10 @@ func getSharingInfo(c *gin.Context) *sharingInfo {
 		parts := strings.Split(strings.TrimPrefix(path, "/sd/"), "/")
 		if len(parts) > 0 && parts[0] != "" {
 			sid := parts[0]
-			sharingDB := &model.SharingDB{}
-			if err := db.GetByID(sharingDB, sid); err == nil {
-				creator := &model.User{}
-				if err := db.GetByID(creator, sharingDB.CreatorId); err == nil {
+			sharingDB, err := db.GetSharingById(sid)
+			if err == nil {
+				creator, err := db.GetUserById(sharingDB.CreatorId)
+				if err == nil {
 					return &sharingInfo{
 						SharingID: sid,
 						Creator:   creator.Username,
@@ -196,10 +196,10 @@ func getSharingInfo(c *gin.Context) *sharingInfo {
 					parts := strings.Split(strings.TrimPrefix(req.Path, "/"), "/")
 					if len(parts) > 0 && len(parts[0]) == 12 { // 共享ID长度为12
 						sid := parts[0]
-						sharingDB := &model.SharingDB{}
-						if err := db.GetByID(sharingDB, sid); err == nil {
-							creator := &model.User{}
-							if err := db.GetByID(creator, sharingDB.CreatorId); err == nil {
+						sharingDB, err := db.GetSharingById(sid)
+						if err == nil {
+							creator, err := db.GetUserById(sharingDB.CreatorId)
+							if err == nil {
 								return &sharingInfo{
 									SharingID: sid,
 									Creator:   creator.Username,

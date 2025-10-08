@@ -338,7 +338,6 @@ func getSharingInfo(c *gin.Context) *sharingInfo {
 // 检测访问行为
 func detectAccessBehavior(c *gin.Context) accessBehavior {
 	userAgent := c.GetHeader("User-Agent")
-	rangeHeader := c.GetHeader("Range")
 	path := c.Request.URL.Path
 	ext := strings.ToLower(filepath.Ext(path))
 	

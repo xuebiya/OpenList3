@@ -2,11 +2,13 @@ package middlewares
 
 import (
 	"bytes"
+	"crypto/md5"
 	"encoding/json"
 	"fmt"
 	"io"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/OpenListTeam/OpenList/v4/internal/conf"
@@ -69,6 +71,59 @@ var ignoredPaths = []string{
 	"/robots.txt",
 	"/ping",
 	"/manifest.json",
+}
+
+// 日志去重缓存
+type logCache struct {
+	mu    sync.RWMutex
+	cache map[string]time.Time
+}
+
+var accessLogCache = &logCache{
+	cache: make(map[string]time.Time),
+}
+
+// 生成缓存键
+func generateCacheKey(clientIP, filePath, username string, behavior accessBehavior) string {
+	key := fmt.Sprintf("%s|%s|%s|%s", clientIP, username, behavior, filePath)
+	hash := md5.Sum([]byte(key))
+	return fmt.Sprintf("%x", hash)
+}
+
+// 检查是否应该记录日志（去重）
+func shouldLogAccess(clientIP, filePath, username string, behavior accessBehavior) bool {
+	cacheKey := generateCacheKey(clientIP, filePath, username, behavior)
+	
+	accessLogCache.mu.Lock()
+	defer accessLogCache.mu.Unlock()
+	
+	// 检查是否在最近3秒内已经记录过相同的访问
+	if lastTime, exists := accessLogCache.cache[cacheKey]; exists {
+		if time.Since(lastTime) < 3*time.Second {
+			return false // 重复访问，不记录
+		}
+	}
+	
+	// 记录新的访问时间
+	accessLogCache.cache[cacheKey] = time.Now()
+	
+	// 定期清理过期的缓存（保留最近10秒的记录）
+	go cleanExpiredCache()
+	
+	return true
+}
+
+// 清理过期的缓存记录
+func cleanExpiredCache() {
+	accessLogCache.mu.Lock()
+	defer accessLogCache.mu.Unlock()
+	
+	now := time.Now()
+	for key, lastTime := range accessLogCache.cache {
+		if now.Sub(lastTime) > 10*time.Second {
+			delete(accessLogCache.cache, key)
+		}
+	}
 }
 
 // 请求和响应的结构体，用于解析JSON
@@ -316,31 +371,28 @@ func isBrowser(userAgent string) bool {
 
 // 获取用户名
 func getUserName(c *gin.Context) string {
-	// 尝试从上下文中获取用户对象
-	userObj, exists := c.Get("user")
-	if exists {
-		// 检查是否可以转换为*model.User类型
-		if user, ok := userObj.(*model.User); ok && user != nil {
+	// 从 context 中获取用户对象（auth 中间件会设置）
+	if userVal := c.Request.Context().Value(conf.UserKey); userVal != nil {
+		if user, ok := userVal.(*model.User); ok && user != nil {
+			// 如果是访客用户，返回"访客"
+			if user.IsGuest() {
+				return "访客"
+			}
 			return user.Username
 		}
+	}
 
-		// 尝试从map中获取username
-		if userMap, ok := userObj.(map[string]interface{}); ok {
-			if username, exists := userMap["username"]; exists {
-				if usernameStr, ok := username.(string); ok {
-					return usernameStr
-				}
+	// 如果无法从 context 获取，尝试从 gin.Context 获取（兼容性）
+	if userObj, exists := c.Get("user"); exists {
+		if user, ok := userObj.(*model.User); ok && user != nil {
+			if user.IsGuest() {
+				return "访客"
 			}
+			return user.Username
 		}
 	}
 
-	// 尝试从Authorization头获取token并解析
-	authHeader := c.GetHeader("Authorization")
-	if strings.HasPrefix(authHeader, "Bearer ") {
-		return "已认证用户"
-	}
-
-	// 如果无法获取用户名，返回访客
+	// 如果都无法获取用户名，返回访客
 	return "访客"
 }
 
@@ -369,6 +421,11 @@ func formatMediaLog(timestamp time.Time, clientIP string, filePath string, usern
 
 // 输出日志到前台和日志文件
 func logMediaAccess(timestamp time.Time, clientIP string, filePath string, username string, behavior accessBehavior, sharing *sharingInfo) {
+	// 去重检查：避免短时间内重复记录相同的访问
+	if !shouldLogAccess(clientIP, filePath, username, behavior) {
+		return // 重复访问，跳过记录
+	}
+	
 	logMsg := formatMediaLog(timestamp, clientIP, filePath, username, behavior, sharing)
 
 	// 输出到日志文件 - 使用纯文本格式，不带前缀
@@ -667,4 +724,5 @@ func MediaLoggerWithDebug() gin.HandlerFunc {
 		}
 	}
 }
+
 

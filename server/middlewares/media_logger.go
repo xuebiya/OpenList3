@@ -14,6 +14,7 @@ import (
 	"github.com/OpenListTeam/OpenList/v4/internal/conf"
 	"github.com/OpenListTeam/OpenList/v4/internal/db"
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
+	"github.com/OpenListTeam/OpenList/v4/server/common"
 	"github.com/gin-gonic/gin"
 	log "github.com/sirupsen/logrus"
 )
@@ -429,21 +430,7 @@ func getUserNameFromRequest(c *gin.Context) string {
 		}
 	}
 
-	// 3. 对于下载链接（/d/*, /p/*），尝试从 Meta 信息推断
-	// 如果路径需要密码保护，说明是特定用户创建的
-	if metaVal := c.Request.Context().Value(conf.MetaKey); metaVal != nil {
-		if meta, ok := metaVal.(*model.Meta); ok && meta != nil {
-			// 如果有密码保护，获取创建者信息
-			if meta.Password != "" {
-				// 尝试获取该路径的所有者
-				if owner, err := db.GetUserById(meta.Uid); err == nil && owner != nil {
-					return owner.Username
-				}
-			}
-		}
-	}
-
-	// 4. 检查是否有 token 参数（某些客户端可能通过 URL 传递）
+	// 3. 检查是否有 token 参数（某些客户端可能通过 URL 传递）
 	if token := c.Query("token"); token != "" {
 		// 尝试解析 token
 		if userClaims, err := common.ParseToken(token); err == nil {
@@ -451,7 +438,7 @@ func getUserNameFromRequest(c *gin.Context) string {
 		}
 	}
 
-	// 5. 默认返回"访客"（表示通过签名链接访问）
+	// 4. 默认返回"访客"（表示通过签名链接访问）
 	return "访客"
 }
 

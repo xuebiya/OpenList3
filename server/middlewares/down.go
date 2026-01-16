@@ -34,13 +34,25 @@ func Down(verifyFunc func(string, string) error) func(c *gin.Context) {
 		}
 		common.GinWithValue(c, conf.MetaKey, meta)
 		
-		// 获取URL中的用户名和签名
-		username := c.Query("user")
-		signStr := strings.TrimSuffix(c.Query("sign"), "/")
+		// 获取URL中的签名
+		signParam := strings.TrimSuffix(c.Query("sign"), "/")
+		
+		// 解析签名中的用户名（格式: sign:user:username 或 sign&user=username）
+		var signStr, username string
+		if strings.Contains(signParam, ":user:") {
+			parts := strings.SplitN(signParam, ":user:", 2)
+			signStr = parts[0]
+			if len(parts) > 1 {
+				username = parts[1]
+			}
+		} else {
+			signStr = signParam
+			username = c.Query("user")
+		}
 		
 		// verify sign
 		if needSign(meta, rawPath) {
-			// 如果URL中有用户名，尝试使用带用户名的签名验证
+			// 如果有用户名，尝试使用带用户名的签名验证
 			if username != "" && signStr != "" {
 				err = sign.VerifyWithUser(rawPath, username, signStr)
 				if err == nil {
@@ -62,7 +74,7 @@ func Down(verifyFunc func(string, string) error) func(c *gin.Context) {
 				return
 			}
 		} else {
-			// 即使不需要签名验证，也尝试从URL参数恢复用户信息
+			// 即使不需要签名验证，也尝试从签名参数恢复用户信息
 			if username != "" && signStr != "" {
 				err = sign.VerifyWithUser(rawPath, username, signStr)
 				if err == nil {

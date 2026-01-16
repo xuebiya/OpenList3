@@ -17,9 +17,17 @@ func Sign(obj model.Obj, parent string, encrypt bool) string {
 	return sign.Sign(stdpath.Join(parent, obj.GetName()))
 }
 
-// SignWithUser 生成包含用户名的签名
+// SignWithUser 生成包含用户名的签名（仅在需要加密时生成）
 func SignWithUser(obj model.Obj, parent string, encrypt bool, username string) string {
 	if obj.IsDir() || (!encrypt && !setting.GetBool(conf.SignAll)) {
+		return ""
+	}
+	return sign.SignWithUser(stdpath.Join(parent, obj.GetName()), username)
+}
+
+// SignWithUserAlways 始终生成包含用户名的签名（用于用户识别）
+func SignWithUserAlways(obj model.Obj, parent string, username string) string {
+	if obj.IsDir() {
 		return ""
 	}
 	return sign.SignWithUser(stdpath.Join(parent, obj.GetName()), username)

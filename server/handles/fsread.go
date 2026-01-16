@@ -248,6 +248,33 @@ func toObjsResp(objs []model.Obj, parent string, encrypt bool) []ObjResp {
 	return resp
 }
 
+func toObjsRespWithUser(objs []model.Obj, parent string, encrypt bool, username string) []ObjResp {
+	var resp []ObjResp
+	for _, obj := range objs {
+		thumb, _ := model.GetThumb(obj)
+		mountDetails, _ := model.GetStorageDetails(obj)
+		// 始终生成包含用户名的签名
+		fileSign := common.SignWithUserAlways(obj, parent, username)
+		if fileSign != "" {
+			fileSign = fileSign + ":user:" + username
+		}
+		resp = append(resp, ObjResp{
+			Name:         obj.GetName(),
+			Size:         obj.GetSize(),
+			IsDir:        obj.IsDir(),
+			Modified:     obj.ModTime(),
+			Created:      obj.CreateTime(),
+			HashInfoStr:  obj.GetHash().String(),
+			HashInfo:     obj.GetHash().Export(),
+			Sign:         fileSign,
+			Thumb:        thumb,
+			Type:         utils.GetObjType(obj.GetName(), obj.IsDir()),
+			MountDetails: mountDetails,
+		})
+	}
+	return resp
+}
+
 type FsGetReq struct {
 	Path     string `json:"path" form:"path"`
 	Password string `json:"password" form:"password"`
@@ -325,11 +352,9 @@ func FsGet(c *gin.Context, req *FsGetReq, user *model.User) {
 		if storage.Config().MustProxy() || storage.GetStorage().WebProxy {
 			rawURL = common.GenerateDownProxyURL(storage.GetStorage(), reqPath)
 			if rawURL == "" {
-				query := ""
-				if isEncrypt(meta, reqPath) || setting.GetBool(conf.SignAll) {
-					// 使用包含用户名的签名
-					query = "?sign=" + sign.SignWithUser(reqPath, user.Username) + "&user=" + user.Username
-				}
+				// 始终使用包含用户名的签名（用于用户识别）
+				userSign := sign.SignWithUser(reqPath, user.Username)
+				query := "?sign=" + userSign + ":user:" + user.Username
 				rawURL = fmt.Sprintf("%s/p%s%s",
 					common.GetApiUrl(c),
 					utils.EncodePath(reqPath, true),
@@ -364,6 +389,14 @@ func FsGet(c *gin.Context, req *FsGetReq, user *model.User) {
 	parentMeta, _ := op.GetNearestMeta(parentPath)
 	thumb, _ := model.GetThumb(obj)
 	mountDetails, _ := model.GetStorageDetails(obj)
+	
+	// 始终生成包含用户名的签名（用于用户识别）
+	fileSign := common.SignWithUserAlways(obj, parentPath, user.Username)
+	// 在签名后附加用户名参数
+	if fileSign != "" {
+		fileSign = fileSign + ":user:" + user.Username
+	}
+	
 	common.SuccessResp(c, FsGetResp{
 		ObjResp: ObjResp{
 			Name:         obj.GetName(),
@@ -373,7 +406,7 @@ func FsGet(c *gin.Context, req *FsGetReq, user *model.User) {
 			Created:      obj.CreateTime(),
 			HashInfoStr:  obj.GetHash().String(),
 			HashInfo:     obj.GetHash().Export(),
-			Sign:         common.Sign(obj, parentPath, isEncrypt(meta, reqPath)),
+			Sign:         fileSign,
 			Type:         utils.GetFileType(obj.GetName()),
 			Thumb:        thumb,
 			MountDetails: mountDetails,
@@ -382,7 +415,7 @@ func FsGet(c *gin.Context, req *FsGetReq, user *model.User) {
 		Readme:   getReadme(meta, reqPath),
 		Header:   getHeader(meta, reqPath),
 		Provider: provider,
-		Related:  toObjsResp(related, parentPath, isEncrypt(parentMeta, parentPath)),
+		Related:  toObjsRespWithUser(related, parentPath, isEncrypt(parentMeta, parentPath), user.Username),
 	})
 }
 

@@ -26,8 +26,8 @@ func Down(c *gin.Context) {
 	rawPath := c.Request.Context().Value(conf.PathKey).(string)
 	filename := stdpath.Base(rawPath)
 	
-	// 记录媒体文件访问日志
-	common.LogMediaAccess(c, rawPath)
+	// 记录媒体文件访问日志（自动检测类型：下载或播放器）
+	common.LogMediaAccessAuto(c, rawPath)
 	
 	storage, err := fs.GetStorage(rawPath, &fs.GetStoragesArgs{})
 	if err != nil {
@@ -56,8 +56,8 @@ func Proxy(c *gin.Context) {
 	rawPath := c.Request.Context().Value(conf.PathKey).(string)
 	filename := stdpath.Base(rawPath)
 	
-	// 记录媒体文件访问日志
-	common.LogMediaAccess(c, rawPath)
+	// 记录媒体文件访问日志（自动检测类型：预览或播放器）
+	common.LogMediaAccessAuto(c, rawPath)
 	
 	storage, err := fs.GetStorage(rawPath, &fs.GetStoragesArgs{})
 	if err != nil {

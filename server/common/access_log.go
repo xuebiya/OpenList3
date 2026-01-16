@@ -14,6 +14,13 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
+// 访问行为类型
+const (
+	AccessTypePreview = "在线预览"
+	AccessTypeDownload = "下载"
+	AccessTypePlayer  = "播放器"
+)
+
 // 访问记录去重
 var (
 	accessCache     = make(map[string]time.Time)
@@ -78,8 +85,73 @@ func shouldLogAccess(clientIP, rawPath string) bool {
 	return true
 }
 
-// LogMediaAccess 记录媒体文件访问日志
+// detectAccessType 检测访问类型
+func detectAccessType(c *gin.Context) string {
+	if c == nil || c.Request == nil {
+		return AccessTypeDownload
+	}
+	
+	userAgent := strings.ToLower(c.Request.UserAgent())
+	referer := c.Request.Referer()
+	
+	// 常见播放器的 User-Agent 特征
+	playerKeywords := []string{
+		"vlc", "mpv", "potplayer", "mpc-hc", "mpc-be", "kodi", "plex",
+		"infuse", "iina", "nplayer", "oplayer", "avplayer", "kmplayer",
+		"gom", "daum", "lavf", "ffmpeg", "libmpv", "exoplayer",
+		"stagefright", "android.media", "quicktime", "windows-media",
+	}
+	
+	for _, keyword := range playerKeywords {
+		if strings.Contains(userAgent, keyword) {
+			return AccessTypePlayer
+		}
+	}
+	
+	// 如果有 Referer 且来自同域，可能是前端预览
+	if referer != "" {
+		// 检查是否来自前端页面
+		if strings.Contains(referer, "/") {
+			return AccessTypePreview
+		}
+	}
+	
+	// 如果 User-Agent 是浏览器且没有 Referer，可能是下载
+	browserKeywords := []string{"mozilla", "chrome", "safari", "firefox", "edge", "opera"}
+	isBrowser := false
+	for _, keyword := range browserKeywords {
+		if strings.Contains(userAgent, keyword) {
+			isBrowser = true
+			break
+		}
+	}
+	
+	if isBrowser && referer == "" {
+		return AccessTypeDownload
+	}
+	
+	// 默认根据请求路径判断
+	path := c.Request.URL.Path
+	if strings.HasPrefix(path, "/d/") {
+		return AccessTypeDownload
+	} else if strings.HasPrefix(path, "/p/") {
+		// /p/ 路径可能是预览或播放器
+		if referer != "" {
+			return AccessTypePreview
+		}
+		return AccessTypePlayer
+	}
+	
+	return AccessTypeDownload
+}
+
+// LogMediaAccess 记录媒体文件访问日志（用于前端预览）
 func LogMediaAccess(c *gin.Context, rawPath string) {
+	LogMediaAccessWithType(c, rawPath, AccessTypePreview)
+}
+
+// LogMediaAccessWithType 记录媒体文件访问日志（指定类型）
+func LogMediaAccessWithType(c *gin.Context, rawPath string, accessType string) {
 	if !IsMediaFile(rawPath) {
 		return
 	}
@@ -110,17 +182,24 @@ func LogMediaAccess(c *gin.Context, rawPath string) {
 		now.Hour(), now.Minute(), now.Second())
 
 	// 构建日志消息
-	logMsg := fmt.Sprintf("时间：%s 访问IP：%s 用户：%s 访问路径：%s",
-		timeStr, clientIP, username, rawPath)
+	logMsg := fmt.Sprintf("时间：%s 访问IP：%s 用户：%s 行为：%s 访问路径：%s",
+		timeStr, clientIP, username, accessType, rawPath)
 
 	// 使用logrus输出（会根据配置输出到文件或控制台）
 	log.WithFields(log.Fields{
-		"type":     "media_access",
-		"ip":       clientIP,
-		"user":     username,
-		"path":     rawPath,
+		"type":        "media_access",
+		"ip":          clientIP,
+		"user":        username,
+		"access_type": accessType,
+		"path":        rawPath,
 	}).Info(logMsg)
 	
 	// 强制输出到标准错误（stderr通常不会被缓冲）
 	fmt.Fprintln(os.Stderr, "[媒体访问] "+logMsg)
+}
+
+// LogMediaAccessAuto 自动检测访问类型并记录日志
+func LogMediaAccessAuto(c *gin.Context, rawPath string) {
+	accessType := detectAccessType(c)
+	LogMediaAccessWithType(c, rawPath, accessType)
 }

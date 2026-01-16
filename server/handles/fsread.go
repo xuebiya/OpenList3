@@ -115,7 +115,7 @@ func FsList(c *gin.Context, req *ListReq, user *model.User) {
 		}
 	}
 	common.SuccessResp(c, FsListResp{
-		Content:           toObjsResp(objs, reqPath, isEncrypt(meta, reqPath)),
+		Content:           toObjsRespWithUser(objs, reqPath, isEncrypt(meta, reqPath), user.Username),
 		Total:             int64(total),
 		Readme:            getReadme(meta, reqPath),
 		Header:            getHeader(meta, reqPath),

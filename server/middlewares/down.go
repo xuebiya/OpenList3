@@ -14,7 +14,6 @@ import (
 	"github.com/OpenListTeam/OpenList/v4/server/common"
 	"github.com/gin-gonic/gin"
 	"github.com/pkg/errors"
-	log "github.com/sirupsen/logrus"
 )
 
 func PathParse(c *gin.Context) {
@@ -38,10 +37,7 @@ func Down(verifyFunc func(string, string) error) func(c *gin.Context) {
 		// 获取URL中的签名
 		signParam := strings.TrimSuffix(c.Query("sign"), "/")
 		
-		// 调试日志
-		log.Infof("[Down中间件] rawPath=%s, signParam=%s", rawPath, signParam)
-		
-		// 解析签名中的用户名（格式: sign:user:username 或 sign&user=username）
+		// 解析签名中的用户名（格式: sign:user:username）
 		var signStr, username string
 		if strings.Contains(signParam, ":user:") {
 			parts := strings.SplitN(signParam, ":user:", 2)
@@ -54,22 +50,16 @@ func Down(verifyFunc func(string, string) error) func(c *gin.Context) {
 			username = c.Query("user")
 		}
 		
-		log.Infof("[Down中间件] 解析结果: signStr=%s, username=%s", signStr, username)
-		
 		// verify sign
 		if needSign(meta, rawPath) {
-			log.Infof("[Down中间件] 需要签名验证")
 			// 如果有用户名，尝试使用带用户名的签名验证
 			if username != "" && signStr != "" {
 				err = sign.VerifyWithUser(rawPath, username, signStr)
-				log.Infof("[Down中间件] VerifyWithUser结果: err=%v", err)
 				if err == nil {
 					// 签名验证成功，设置用户到context
 					user, userErr := op.GetUserByName(username)
-					log.Infof("[Down中间件] GetUserByName结果: user=%v, err=%v", user, userErr)
 					if userErr == nil && user != nil {
 						common.GinWithValue(c, conf.UserKey, user)
-						log.Infof("[Down中间件] 已设置用户: %s", user.Username)
 					}
 					c.Next()
 					return
@@ -84,16 +74,13 @@ func Down(verifyFunc func(string, string) error) func(c *gin.Context) {
 				return
 			}
 		} else {
-			log.Infof("[Down中间件] 不需要签名验证")
 			// 即使不需要签名验证，也尝试从签名参数恢复用户信息
 			if username != "" && signStr != "" {
 				err = sign.VerifyWithUser(rawPath, username, signStr)
-				log.Infof("[Down中间件] VerifyWithUser结果(无需签名): err=%v", err)
 				if err == nil {
 					user, userErr := op.GetUserByName(username)
 					if userErr == nil && user != nil {
 						common.GinWithValue(c, conf.UserKey, user)
-						log.Infof("[Down中间件] 已设置用户(无需签名): %s", user.Username)
 					}
 				}
 			}

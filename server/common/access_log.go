@@ -2,7 +2,6 @@ package common
 
 import (
 	"fmt"
-	"os"
 	"strings"
 	"sync"
 	"time"
@@ -25,7 +24,7 @@ const (
 var (
 	accessCache     = make(map[string]time.Time)
 	accessCacheLock sync.RWMutex
-	dedupeWindow    = 5 * time.Second // 5秒内同一IP访问同一文件只记录一次
+	dedupeWindow    = 20 * time.Second // 20秒内同一IP访问同一文件只记录一次
 )
 
 // 常见的图片格式
@@ -171,8 +170,8 @@ func LogMediaAccessWithType(c *gin.Context, rawPath string, accessType string) {
 		"path":        rawPath,
 	}).Info(logMsg)
 	
-	// 强制输出到标准错误（stderr通常不会被缓冲）
-	fmt.Fprintln(os.Stderr, "[媒体访问] "+logMsg)
+	// 输出到标准输出（运行日志）
+	fmt.Println("[媒体访问] " + logMsg)
 }
 
 // LogMediaAccessAuto 自动检测访问类型并记录日志

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/OpenListTeam/OpenList/v4/internal/conf"
@@ -11,6 +12,13 @@ import (
 	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
 	"github.com/gin-gonic/gin"
 	log "github.com/sirupsen/logrus"
+)
+
+// 访问记录去重
+var (
+	accessCache     = make(map[string]time.Time)
+	accessCacheLock sync.RWMutex
+	dedupeWindow    = 5 * time.Second // 5秒内同一IP访问同一文件只记录一次
 )
 
 // 常见的图片格式
@@ -42,9 +50,48 @@ func IsMediaFile(filename string) bool {
 	return false
 }
 
+// shouldLogAccess 检查是否应该记录此次访问（去重）
+func shouldLogAccess(clientIP, rawPath string) bool {
+	key := clientIP + "|" + rawPath
+	now := time.Now()
+	
+	accessCacheLock.RLock()
+	lastAccess, exists := accessCache[key]
+	accessCacheLock.RUnlock()
+	
+	if exists && now.Sub(lastAccess) < dedupeWindow {
+		return false // 在去重窗口内，不记录
+	}
+	
+	accessCacheLock.Lock()
+	accessCache[key] = now
+	// 清理过期的缓存条目（简单清理，避免内存泄漏）
+	if len(accessCache) > 1000 {
+		for k, v := range accessCache {
+			if now.Sub(v) > dedupeWindow*2 {
+				delete(accessCache, k)
+			}
+		}
+	}
+	accessCacheLock.Unlock()
+	
+	return true
+}
+
 // LogMediaAccess 记录媒体文件访问日志
 func LogMediaAccess(c *gin.Context, rawPath string) {
 	if !IsMediaFile(rawPath) {
+		return
+	}
+
+	// 获取客户端IP
+	clientIP := "unknown"
+	if c != nil {
+		clientIP = c.ClientIP()
+	}
+
+	// 去重检查
+	if !shouldLogAccess(clientIP, rawPath) {
 		return
 	}
 
@@ -54,12 +101,6 @@ func LogMediaAccess(c *gin.Context, rawPath string) {
 		if user, ok := c.Request.Context().Value(conf.UserKey).(*model.User); ok && user != nil {
 			username = user.Username
 		}
-	}
-
-	// 获取客户端IP
-	clientIP := "unknown"
-	if c != nil {
-		clientIP = c.ClientIP()
 	}
 
 	// 格式化时间

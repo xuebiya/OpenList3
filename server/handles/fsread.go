@@ -327,7 +327,8 @@ func FsGet(c *gin.Context, req *FsGetReq, user *model.User) {
 			if rawURL == "" {
 				query := ""
 				if isEncrypt(meta, reqPath) || setting.GetBool(conf.SignAll) {
-					query = "?sign=" + sign.Sign(reqPath)
+					// 使用包含用户名的签名
+					query = "?sign=" + sign.SignWithUser(reqPath, user.Username) + "&user=" + user.Username
 				}
 				rawURL = fmt.Sprintf("%s/p%s%s",
 					common.GetApiUrl(c),

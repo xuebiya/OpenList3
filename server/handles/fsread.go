@@ -349,35 +349,24 @@ func FsGet(c *gin.Context, req *FsGetReq, user *model.User) {
 			common.ErrorResp(c, err, 500)
 			return
 		}
+		// 始终使用包含用户名的签名（用于用户识别）
+		userSign := sign.SignWithUser(reqPath, user.Username)
+		signQuery := "?sign=" + userSign + ":user:" + user.Username
+		
 		if storage.Config().MustProxy() || storage.GetStorage().WebProxy {
 			rawURL = common.GenerateDownProxyURL(storage.GetStorage(), reqPath)
 			if rawURL == "" {
-				// 始终使用包含用户名的签名（用于用户识别）
-				userSign := sign.SignWithUser(reqPath, user.Username)
-				query := "?sign=" + userSign + ":user:" + user.Username
 				rawURL = fmt.Sprintf("%s/p%s%s",
 					common.GetApiUrl(c),
 					utils.EncodePath(reqPath, true),
-					query)
+					signQuery)
 			}
 		} else {
-			// file have raw url
-			if url, ok := model.GetUrl(obj); ok {
-				rawURL = url
-			} else {
-				// if storage is not proxy, use raw url by fs.Link
-				link, _, err := fs.Link(c.Request.Context(), reqPath, model.LinkArgs{
-					IP:       c.ClientIP(),
-					Header:   c.Request.Header,
-					Redirect: true,
-				})
-				if err != nil {
-					common.ErrorResp(c, err, 500)
-					return
-				}
-				defer link.Close()
-				rawURL = link.URL
-			}
+			// 使用 /d/ 路径，这样可以记录用户访问日志
+			rawURL = fmt.Sprintf("%s/d%s%s",
+				common.GetApiUrl(c),
+				utils.EncodePath(reqPath, true),
+				signQuery)
 		}
 	}
 	var related []model.Obj

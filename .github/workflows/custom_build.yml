@@ -1,0 +1,105 @@
+name: Custom Build (Windows & Linux)
+
+on:
+  push:
+    branches: ["main"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        target:
+          - windows-amd64
+          - linux-amd64-musl
+          - linux-arm64-musl
+    name: Build ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - uses: benjlevesque/short-sha@v3.0
+        id: short-sha
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.0"
+
+      - name: Setup web
+        run: bash build.sh dev web
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          FRONTEND_REPO: ${{ vars.FRONTEND_REPO }}
+
+      - name: Build
+        uses: OpenListTeam/cgo-actions@v1.2.2
+        with:
+          targets: ${{ matrix.target }}
+          musl-target-format: $os-$musl-$arch
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          out-dir: build
+          x-flags: |
+            github.com/OpenListTeam/OpenList/v4/internal/conf.BuiltAt=$built_at
+            github.com/OpenListTeam/OpenList/v4/internal/conf.GitAuthor=xuebiya
+            github.com/OpenListTeam/OpenList/v4/internal/conf.GitCommit=$git_commit
+            github.com/OpenListTeam/OpenList/v4/internal/conf.Version=$tag
+            github.com/OpenListTeam/OpenList/v4/internal/conf.WebVersion=rolling
+          output: openlist$ext
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: openlist_${{ steps.short-sha.outputs.sha }}_${{ matrix.target }}
+          path: build/*
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Prepare release files
+        run: |
+          mkdir -p release
+          find artifacts -type f -name "openlist*" -exec cp {} release/ \;
+          cd release
+          for f in openlist; do
+            if [ -f "$f" ]; then
+              chmod +x "$f"
+              tar -czvf "${f}-linux.tar.gz" "$f"
+              rm "$f"
+            fi
+          done
+          for f in openlist.exe; do
+            if [ -f "$f" ]; then
+              zip "${f%.exe}-windows.zip" "$f"
+              rm "$f"
+            fi
+          done
+          ls -la
+
+      - name: Get current date
+        id: date
+        run: echo "date=$(date +'%Y%m%d-%H%M%S')" >> $GITHUB_OUTPUT
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ steps.date.outputs.date }}
+          name: Build ${{ steps.date.outputs.date }}
+          body: |
+            自动构建版本 - 包含媒体访问日志功能
+            
+            当访问图片或视频文件时，会输出以下格式的日志：
+            时间：2026年1月16日 01:38:39 访问IP：x.x.x.x 用户：xxx 访问路径：/xxx
+          files: release/*
+          draft: false
+          prerelease: false

@@ -50,12 +50,17 @@ func LogMediaAccess(c *gin.Context, rawPath string) {
 
 	// 获取用户信息
 	username := "Guest"
-	if user, ok := c.Request.Context().Value(conf.UserKey).(*model.User); ok && user != nil {
-		username = user.Username
+	if c != nil && c.Request != nil && c.Request.Context() != nil {
+		if user, ok := c.Request.Context().Value(conf.UserKey).(*model.User); ok && user != nil {
+			username = user.Username
+		}
 	}
 
 	// 获取客户端IP
-	clientIP := c.ClientIP()
+	clientIP := "unknown"
+	if c != nil {
+		clientIP = c.ClientIP()
+	}
 
 	// 格式化时间
 	now := time.Now()
@@ -67,7 +72,14 @@ func LogMediaAccess(c *gin.Context, rawPath string) {
 	logMsg := fmt.Sprintf("时间：%s 访问IP：%s 用户：%s 访问路径：%s",
 		timeStr, clientIP, username, rawPath)
 
-	// 输出日志
-	log.Info(logMsg)
-	fmt.Fprintln(os.Stdout, logMsg)
+	// 使用logrus输出（会根据配置输出到文件或控制台）
+	log.WithFields(log.Fields{
+		"type":     "media_access",
+		"ip":       clientIP,
+		"user":     username,
+		"path":     rawPath,
+	}).Info(logMsg)
+	
+	// 强制输出到标准错误（stderr通常不会被缓冲）
+	fmt.Fprintln(os.Stderr, "[媒体访问] "+logMsg)
 }

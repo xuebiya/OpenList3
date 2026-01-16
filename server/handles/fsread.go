@@ -287,6 +287,10 @@ func FsGet(c *gin.Context, req *FsGetReq, user *model.User) {
 		common.ErrorResp(c, err, 403)
 		return
 	}
+	
+	// 记录媒体文件访问日志（当获取文件信息时）
+	common.LogMediaAccess(c, reqPath)
+	
 	meta, err := op.GetNearestMeta(reqPath)
 	if err != nil {
 		if !errors.Is(errors.Cause(err), errs.MetaNotFound) {

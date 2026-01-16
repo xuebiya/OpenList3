@@ -92,7 +92,7 @@ func detectAccessType(c *gin.Context) string {
 	}
 	
 	userAgent := strings.ToLower(c.Request.UserAgent())
-	referer := c.Request.Referer()
+	path := c.Request.URL.Path
 	
 	// 常见播放器的 User-Agent 特征
 	playerKeywords := []string{
@@ -108,38 +108,15 @@ func detectAccessType(c *gin.Context) string {
 		}
 	}
 	
-	// 如果有 Referer 且来自同域，可能是前端预览
-	if referer != "" {
-		// 检查是否来自前端页面
-		if strings.Contains(referer, "/") {
-			return AccessTypePreview
-		}
-	}
-	
-	// 如果 User-Agent 是浏览器且没有 Referer，可能是下载
-	browserKeywords := []string{"mozilla", "chrome", "safari", "firefox", "edge", "opera"}
-	isBrowser := false
-	for _, keyword := range browserKeywords {
-		if strings.Contains(userAgent, keyword) {
-			isBrowser = true
-			break
-		}
-	}
-	
-	if isBrowser && referer == "" {
-		return AccessTypeDownload
-	}
-	
-	// 默认根据请求路径判断
-	path := c.Request.URL.Path
+	// 根据请求路径判断
+	// /d/ 路径是下载
 	if strings.HasPrefix(path, "/d/") {
 		return AccessTypeDownload
-	} else if strings.HasPrefix(path, "/p/") {
-		// /p/ 路径可能是预览或播放器
-		if referer != "" {
-			return AccessTypePreview
-		}
-		return AccessTypePlayer
+	}
+	
+	// /p/ 路径是代理/预览
+	if strings.HasPrefix(path, "/p/") {
+		return AccessTypePreview
 	}
 	
 	return AccessTypeDownload

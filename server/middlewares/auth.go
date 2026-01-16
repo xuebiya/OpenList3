@@ -75,6 +75,50 @@ func Auth(allowDisabledGuest bool) func(c *gin.Context) {
 	}
 }
 
+// AuthOptional 可选认证中间件，尝试解析用户但不强制要求
+// 用于下载路由，尝试从 Authorization header 或 token query 参数获取用户信息
+func AuthOptional(c *gin.Context) {
+	// 尝试从 header 获取 token
+	token := c.GetHeader("Authorization")
+	// 如果 header 没有，尝试从 query 参数获取
+	if token == "" {
+		token = c.Query("token")
+	}
+	
+	// 检查是否是管理员 token
+	if token != "" && subtle.ConstantTimeCompare([]byte(token), []byte(setting.GetStr(conf.Token))) == 1 {
+		admin, err := op.GetAdmin()
+		if err == nil {
+			common.GinWithValue(c, conf.UserKey, admin)
+			log.Debugf("auth optional: use admin token")
+			c.Next()
+			return
+		}
+	}
+	
+	// 尝试解析用户 token
+	if token != "" {
+		userClaims, err := common.ParseToken(token)
+		if err == nil {
+			user, err := op.GetUserByName(userClaims.Username)
+			if err == nil && userClaims.PwdTS == user.PwdTS && !user.Disabled {
+				common.GinWithValue(c, conf.UserKey, user)
+				log.Debugf("auth optional: use user token: %s", user.Username)
+				c.Next()
+				return
+			}
+		}
+	}
+	
+	// 如果没有有效 token，设置为 guest（但不阻止请求）
+	guest, err := op.GetGuest()
+	if err == nil {
+		common.GinWithValue(c, conf.UserKey, guest)
+	}
+	log.Debugf("auth optional: use guest")
+	c.Next()
+}
+
 func Authn(c *gin.Context) {
 	token := c.GetHeader("Authorization")
 	if subtle.ConstantTimeCompare([]byte(token), []byte(setting.GetStr(conf.Token))) == 1 {

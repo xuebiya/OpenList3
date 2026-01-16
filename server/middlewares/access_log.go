@@ -2,6 +2,7 @@ package middlewares
 
 import (
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -44,17 +45,17 @@ func isMediaFile(filename string) bool {
 // MediaAccessLog 记录图片和视频文件的访问日志
 func MediaAccessLog() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		// 先执行后续处理
-		c.Next()
-
+		// 在请求处理前记录日志，确保日志能够输出
 		// 获取访问路径
 		rawPath, ok := c.Request.Context().Value(conf.PathKey).(string)
 		if !ok || rawPath == "" {
+			c.Next()
 			return
 		}
 
 		// 检查是否为媒体文件
 		if !isMediaFile(rawPath) {
+			c.Next()
 			return
 		}
 
@@ -73,8 +74,15 @@ func MediaAccessLog() gin.HandlerFunc {
 			now.Year(), now.Month(), now.Day(),
 			now.Hour(), now.Minute(), now.Second())
 
-		// 输出访问日志
-		log.Infof("时间：%s 访问IP：%s 用户：%s 访问路径：%s",
+		// 构建日志消息
+		logMsg := fmt.Sprintf("时间：%s 访问IP：%s 用户：%s 访问路径：%s",
 			timeStr, clientIP, username, rawPath)
+
+		// 使用多种方式输出日志，确保能看到
+		log.Info(logMsg)
+		// 同时输出到标准输出，确保实时可见
+		fmt.Fprintln(os.Stdout, logMsg)
+
+		c.Next()
 	}
 }
